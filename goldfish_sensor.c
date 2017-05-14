@@ -156,46 +156,18 @@ static ssize_t goldfish_sensor_read(struct file *fp, char __user *buf,
 	else
 	{	
 		memcpy(data->read_buffer, 0, READ_BUFFER_SIZE);
-		printk("-0----------%s-------\n", data->read_buffer);
 	}
 	
 	wait_event_interruptible(data->wait, data->buffer_status);  // turn irq
 	result += READ_BUFFER_SIZE;	// Make sure that the result is READ_BUFFER_SIZE, otherwise release will be activited after this function
-	
-	printk("-goldfish_sensor_read---after interupt-- buffer status--------------%d---\n", data->buffer_status);
 
-	int* temp1 = kmalloc(sizeof(char), GFP_KERNEL);
-	if(data->buffer_status & SENSOR_IRQ_ACCEL)
-	{
-		temp1[0] = data->read_buffer[0];
-		temp1[1] = data->read_buffer[1];
-		temp1[2] = data->read_buffer[2];
-		printk("||\t\tACCEL_X=%d, ACCEL_Y=%d, ACCEL_Z=%d\t\t\t||\n", temp1[0]>>8, temp1[1]>>8, temp1[2]>>8);
-	}
-	if(data->buffer_status & SENSOR_IRQ_COMPASS)
-	{
-		temp1[3] = data->read_buffer[3];
-		temp1[4] = data->read_buffer[4];
-		temp1[5] = data->read_buffer[5];
-		printk("||\t\tCOMPASS_X=%d, COMPASS_Y=%d, COMPASS_Z=%d\t\t||\n", temp1[3]>>8, temp1[4]>>8, temp1[5]>>8);
-	}
-	if(data->buffer_status & SENSOR_IRQ_GYRO)
-	{
-		temp1[6] = data->read_buffer[6];
-		temp1[7] = data->read_buffer[7];
-		temp1[8] = data->read_buffer[8];
-		printk("||\t\tGYRO_X=%d, GYRO_Y=%d, GYRO_Z=%d\t\t\t||\n", temp1[6]>>8, temp1[7]>>8, temp1[8]>>8);
-	}
 
-	data->buffer_status = 0;	// Make sure that the wait_event_interruptible can be activited next read
 	/* copy data to user space */
 	if (copy_to_user(buf, data->read_buffer, READ_BUFFER_SIZE))
 	{
 		printk("copy_from_user failed!\n");
 		return -EFAULT;
 	}
-	
-	kfree(temp1);
 	kfree(temp);  //free memory
 	return result;
 }
@@ -207,8 +179,6 @@ static ssize_t goldfish_sensor_write(struct file *fp, const char __user *buf,
 	unsigned long irq_flags;
 	int result = 0;
 
-	//wait_event_interruptible(data->wait, data->buffer_status); 
-	//kbuf = &(data->buffer_status);
 	/* copy from user space to the appropriate buffer */
 	spin_lock_irqsave(&data->lock, irq_flags);
 	if (copy_from_user(&(data->buffer_status), buf, WRITE_BUFFER_SIZE))
@@ -217,7 +187,6 @@ static ssize_t goldfish_sensor_write(struct file *fp, const char __user *buf,
 		result = -EFAULT;
 	}
 	spin_unlock_irqrestore(&data->lock, irq_flags);
-	printk("-goldfish_sensor_write--- buffer status--------------%d---\n", data->buffer_status);
 	result += WRITE_BUFFER_SIZE;
 	return result;
 }
@@ -232,11 +201,7 @@ static int goldfish_sensor_open(struct inode *ip, struct file *fp)
 	if (atomic_inc_return(&open_count) == 1) 
 	{
 		fp->private_data = sensor_data;
-
-		printk("-goldfish_sensor_open buffer status--------------%d---\n", sensor_data->buffer_status);
-		//sensor_data->buffer_status = (SENSOR_IRQ_ACCEL | SENSOR_IRQ_COMPASS | SENSOR_IRQ_GYRO);
 		GOLDFISH_SENSOR_WRITE(sensor_data, INT_ENABLE, SENSOR_MASK);
-		printk("-after ---goldfish_sensor_open buffer status--------------%d---\n", sensor_data->buffer_status);
 		return 0;
 	} 
 	else 
@@ -273,10 +238,8 @@ static irqreturn_t goldfish_sensor_interrupt(int irq, void *dev_id)
 	status = GOLDFISH_SENSOR_READ(data, INT_ENABLE);
 	status &= SENSOR_MASK; 		
 
-	printk("-before---goldfish_sensor_interrupt buffer status--------------%d---\n", data->buffer_status);
 	/* if buffers are newly empty, wake up blocked goldfish_sensor_write() call */
 	if(status) {//check status
-		printk("-goldfish_sensor_interrupt buffer status--------------%d---\n", data->buffer_status);
 		data->buffer_status = status;
 		wake_up(&data->wait);
 	}
@@ -373,7 +336,6 @@ static int goldfish_sensor_probe(struct platform_device *pdev)
 	//initialize the original buffer_status 111
 	data->buffer_status = (SENSOR_IRQ_ACCEL | SENSOR_IRQ_COMPASS | SENSOR_IRQ_GYRO);  
 	GOLDFISH_SENSOR_WRITE(data, INT_ENABLE, SENSOR_MASK);
-	printk("-goldfish_sensor_probe buffer status--------------%d---\n", data->buffer_status);
 	sensor_data = data;
 	
 	return 0;
