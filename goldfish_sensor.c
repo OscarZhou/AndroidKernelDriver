@@ -55,7 +55,7 @@ struct goldfish_sensor {
 
 	unsigned long buffer_phys;
 	
-	int __iomem *read_buffer;      /* read buffer virtual address */
+	char __iomem *read_buffer;      /* read buffer virtual address */
 	int buffer_status;
 
 };
@@ -64,8 +64,8 @@ struct goldfish_sensor {
 #define GOLDFISH_SENSOR_READ(data, addr)   (readl(data->reg_base + addr))
 #define GOLDFISH_SENSOR_WRITE(data, addr, x)   (writel(x, data->reg_base + addr))
 
-#define READ_BUFFER_SIZE 36 //sizeof(int)*9
-#define WRITE_BUFFER_SIZE 4 // sizeof(int)
+#define READ_BUFFER_SIZE 256 //
+#define WRITE_BUFFER_SIZE 4 // 
 #define COMBINED_BUFFER_SIZE (READ_BUFFER_SIZE + WRITE_BUFFER_SIZE)
 
 /* temporary variable used between goldfish_sensor_probe() and goldfish_sensor_open() */
@@ -111,57 +111,49 @@ static ssize_t goldfish_sensor_read(struct file *fp, char __user *buf,
 	struct goldfish_sensor* data = fp->private_data;
 	int length;
 	int result = 0;
+	
+	char temp_buffer[256];
+	char temp_buffer1[256] = {0};
+	char temp_buffer2[256] = {0};
+	char temp_buffer3[256] = {0};
+	
 	int* temp = kmalloc(sizeof(char), GFP_KERNEL);
-	if((data->buffer_status & SENSOR_MASK) != 0)
+	if(data->buffer_status != 0)
 	{
 		if((data->buffer_status & SENSOR_IRQ_ACCEL) != 0)
 		{
 			temp[0] = GOLDFISH_SENSOR_READ(data, ACCEL_X);
 			temp[1] = GOLDFISH_SENSOR_READ(data, ACCEL_Y);
 			temp[2] = GOLDFISH_SENSOR_READ(data, ACCEL_Z);
-		}
-		else
-		{
-			temp[0] = 0;
-			temp[1] = 0;
-			temp[2] = 0;
+			int length = sprintf(temp_buffer1, "acceleration:%d:%d:%d", temp[0], temp[1], temp[2]);
 		}
 		if((data->buffer_status & SENSOR_IRQ_COMPASS) != 0)
 		{
 			temp[3] = GOLDFISH_SENSOR_READ(data, COMPASS_X);
 			temp[4] = GOLDFISH_SENSOR_READ(data, COMPASS_Y);
 			temp[5] = GOLDFISH_SENSOR_READ(data, COMPASS_Z);
-		}
-		else
-		{
-			temp[3] = 0;
-			temp[4] = 0;
-			temp[5] = 0;
+			int length = sprintf(temp_buffer2, "magnetic:%d:%d:%d", temp[3], temp[4], temp[5]);
 		}
 		if((data->buffer_status & SENSOR_IRQ_GYRO) != 0)
 		{
 			temp[6] = GOLDFISH_SENSOR_READ(data, GYRO_X);
 			temp[7] = GOLDFISH_SENSOR_READ(data, GYRO_Y);
 			temp[8] = GOLDFISH_SENSOR_READ(data, GYRO_Z);
+			int length = sprintf(temp_buffer3, "gyroscope:%d:%d:%d", temp[6], temp[7], temp[8]);
 		}
-		else
-		{
-			temp[6] = 0;
-			temp[7] = 0;
-			temp[8] = 0;
-		}
-		memcpy(data->read_buffer, temp, READ_BUFFER_SIZE);	//copy value from register to sensor_data
+		int length = sprintf(temp_buffer, "%s %s %s", temp_buffer1, temp_buffer2, temp_buffer3);
+		memcpy(data->read_buffer, temp_buffer, READ_BUFFER_SIZE);	//copy value from register to sensor_data
 
 	} 
 	else
 	{	
 		memcpy(data->read_buffer, 0, READ_BUFFER_SIZE);
 	}
-	
+	printk("temp_buffer = %s\n", temp_buffer);
 	wait_event_interruptible(data->wait, data->buffer_status);  // turn irq
 	result += READ_BUFFER_SIZE;	// Make sure that the result is READ_BUFFER_SIZE, otherwise release will be activited after this function
 
-
+	
 	/* copy data to user space */
 	if (copy_to_user(buf, data->read_buffer, READ_BUFFER_SIZE))
 	{
@@ -178,6 +170,8 @@ static ssize_t goldfish_sensor_write(struct file *fp, const char __user *buf,
 	struct goldfish_sensor* data = fp->private_data;
 	unsigned long irq_flags;
 	int result = 0;
+
+
 
 	/* copy from user space to the appropriate buffer */
 	spin_lock_irqsave(&data->lock, irq_flags);
@@ -236,11 +230,11 @@ static irqreturn_t goldfish_sensor_interrupt(int irq, void *dev_id)
 	spin_lock_irqsave(&data->lock, irq_flags);	
 	/* read buffer status flags */
 	status = GOLDFISH_SENSOR_READ(data, INT_ENABLE);
-	status &= SENSOR_MASK; 		
+	//the buffer_status is determined by userspace, even if the the device offer the data of certain sensor which is disabled by userspace, the kernel won't response.	
+	status &= data->buffer_status; 	
 
 	/* if buffers are newly empty, wake up blocked goldfish_sensor_write() call */
 	if(status) {//check status
-		data->buffer_status = status;
 		wake_up(&data->wait);
 	}
 	
